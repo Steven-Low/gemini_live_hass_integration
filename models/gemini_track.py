@@ -7,7 +7,7 @@ from aiortc import (
 )
 from aiortc.contrib.media import MediaStreamError
 from av.audio.frame import AudioFrame
-from ..config.constants import (
+from ..config.const import (
     GEMINI_WEBRTC_SAMPLE_RATE,
     SAMPLES_PER_FRAME,
     WEBRTC_TIME_BASE

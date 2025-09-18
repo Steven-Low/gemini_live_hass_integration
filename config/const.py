@@ -34,3 +34,5 @@ The current time is {{ now().strftime("%X") }}.
 Todays date is {{ now().strftime("%d/%m/%y") }}.
 An overview of the areas and the devices in this smart home:
 """
+
+WAKE_WORD_MODEL = "ok_nabu.onnx"

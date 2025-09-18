@@ -8,7 +8,7 @@ from aiortc import (
     RTCIceCandidate,
 )
 
-from ..config.constants import ICE_SERVERS
+from ..config.const import ICE_SERVERS
 
 
 LOGGER = logging.getLogger(__name__)

@@ -14,7 +14,6 @@ from openai.types.chat import (
 )
 from openai.types.shared_params import FunctionDefinition
 import voluptuous as vol
-from voluptuous_openapi import convert
 
 from aiortc.contrib.media import MediaStreamError
 from av.audio.resampler import AudioResampler
@@ -22,14 +21,21 @@ from openwakeword.model import Model
 from homeassistant.exceptions import HomeAssistantError, TemplateError
 from homeassistant.core import HomeAssistant
 from homeassistant.components import conversation
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_API_KEY
 from homeassistant.helpers import (
     device_registry as dr, intent, llm, template
 )
 
+from ..models.devices import GeminiLiveDevice
 from ..llm.base import BaseLLMManager
-from ..services.homeassistant_api import turn_on_light, turn_off_light
-from ..services.utils import get_exposed_entities, convert_entities_to_prompt, convert_openai_tools_to_gemini
-from ..config.constants import (
+from ..services.utils import (
+    get_exposed_entities,
+    convert_entities_to_prompt,
+    convert_openai_tools_to_gemini,
+    _format_tool
+)
+from ..config.const import (
     GEMINI_SAMPLE_RATE,
     CONF_CHAT_MODEL,
     CHUNK_SIZE_BYTES,
@@ -39,31 +45,22 @@ from ..config.constants import (
     GEMINI_LANGUAGE,
     DOMAIN,
     LLM_TEMPLATE_PROMPT,
+    WAKE_WORD_MODEL
 )
 
 
 LOGGER = logging.getLogger(__name__)
 
-turn_on_the_lights = {'name': 'turn_on_the_lights'}
-turn_off_the_lights = {'name': 'turn_off_the_lights'}
-wake_up = {'name': 'good_bye'}
 
-WAKE_WORD_MODEL = "ok_nabu.onnx"
-
-# TODO: FORCE SHUTDOWN THE MODEL WITHIN TIME INTERVAL AFTER MUTE EXECUTION
-WAKE_BUFFER = 560    # Multiple of 80 (Optimize accordingly with wakeword length to debounce)
+WAKE_BUFFER = 400    # Multiple of 80 (Optimize accordingly with wakeword length to debounce)
 WAKE_THRESHOLD = 0.6
-GEMINI_TOOLS = [
-    {'google_search': {}},
-    {"code_execution": {}},
-    {"function_declarations": [turn_on_the_lights, turn_off_the_lights, wake_up]}
-]
+DEBOUNCE_TIME = 2
 
 DEFAULT_INSTRUCTIONS_PROMPT = """You are a voice assistant for Home Assistant.
 Answer questions about the world truthfully.
 Answer in plain text. Keep it simple and to the point.
 
-You also have access to the following functions (tools):
+You also have access to the following functions for smart home:
 - HassTurnOn: Turns on, opens, presses, or locks a device or entity.
 - HassTurnOff: Turns off, closes, disables, or unlocks a device or entity.
 - HassCancelAllTimers: Cancels all timers in an area.
@@ -78,6 +75,11 @@ You also have access to the following functions (tools):
 - HassSetVolume: Sets the volume percentage of a media player. Requires "volume_level" (0–100).
 - GetLiveContext: Provides real-time information about the current state, value, or mode of devices, sensors, entities, or areas.
 
+You also have access to the following additional functions or tools:
+- good_bye: Function ends the current wake session when user say bye or has no intent to continue conversation.
+- google_search: Tool performs a search on the internet and returns summarized results.
+- code_execution: Tool executes Python code to compute results or answer questions.
+
 When the user request requires interacting with Home Assistant, call the appropriate tool
 instead of just answering in plain text. Otherwise, just answer normally.
 
@@ -91,55 +93,17 @@ Assistant → HassTurnOn:
 }
 """
 
-GEMINI_SYSTEM_PROMPT = """
-I. Core Elements
-Task Definition:
-You are a helpful and informative AI assistant with several capabilities:
-Answering factual questions using your knowledge and supplementing information with web search results.
-Retrieving information from the web using the 'google_search'  tool if the information is beyond your cut-off date.
-Safety & Ethics
-Absolute Priority: Responses must never be harmful, incite violence, promote hatred, or violate ethical standards. Err on the side of caution if safety is in question.
-Browser: Cite reputable sources and prioritize trustworthy websites.
-Controversial Topics: Provide objective information without downplaying harmful content or implying false equivalency of perspectives.
-Social Responsibility: Do not generate discriminatory responses, promote hate speech, or are socially harmful.
-Knowledge Boundaries:
-Direct users to the 'google_search'  tool for topics outside your knowledge base or those requiring real-time information.
-Source Transparency: Distinguish between existing knowledge and information found in search results. Prioritize reputable and trustworthy websites when citing search results.
-II. Refinement Elements
-Personality & Style:
-Maintain a polite and informative tone. Inject light humor only when it feels natural and doesn’t interfere with providing accurate information.
-Language: No matter what the user speak, your response must be in English.
-Self Awareness:
-Identify yourself as an AI language model.
-Acknowledge when you lack information and suggest using the 'google_search'  tool.
-Refer users to human experts for complex inquiries outside your scope.
-Handling Disagreement: While prioritizing the user’s request, consider providing an alternate perspective if it aligns with safety and objectivity and acknowledges potential biases.
-III. Sleep Mode
-Using the user said  good bye or leaving, execute the 'good_bye' tool to turn into sleep mode
-IV. Google Search Integration
-Focused Answers: When answering questions using google search tool results, synthesize information from the provided results.
-Source Prioritization: Prioritize reputable and trustworthy websites. Cite sources using numerical references [1]. Avoid generating URLs within the response.
-Knowledge Integration: You may supplement web results with your existing knowledge base, clearly identifying the source of each piece of information.
-Conflict Resolution: If search results present conflicting information, acknowledge the discrepancy and summarize the different viewpoints found [1,2].
-Iterative Search: Conduct multiple searches (up to [Number]) per turn, refining your queries based on user feedback.
-"""
 
-def _format_tool(
-    tool: llm.Tool, custom_serializer: Callable[[Any], Any] | None
-) -> ChatCompletionToolParam:
-    """Format tool specification."""
-    tool_spec = FunctionDefinition(
-        name=tool.name,
-        parameters=convert(tool.parameters, custom_serializer=custom_serializer),
-    )
-    if tool.description:
-        tool_spec["description"] = tool.description
-    return ChatCompletionToolParam(type="function", function=tool_spec)
 
 
 class GeminiClientManager(BaseLLMManager):
-    def __init__(self, hass:HomeAssistant, remote_user_id):
+    def __init__(self, hass:HomeAssistant, config_entry: ConfigEntry, device: GeminiLiveDevice, remote_user_id):
         super().__init__()
+        self.hass = hass
+        self.config_entry = config_entry
+        self.device = device
+        self._active = True
+
         self.llm_name = "gemini"
         self.session = None
         self.remote_user_id = remote_user_id
@@ -149,14 +113,13 @@ class GeminiClientManager(BaseLLMManager):
         self.wakeword_model = None
         self.session_handle = None
         self.wake_buffer = np.array([], dtype=np.int16)  # buffer for wake word detection
-
         self.is_wake = asyncio.Event()
         self.interrupt_enabled = True
+        self.last_wake_time = 0
         self.prompt = None
         self.llm_api = None
-        self.function_declarations = None
-
-        self.hass = hass
+        self.tools = []
+        self.hass_function_declarations_names = []
 
 
     #TODO: Handle video frames
@@ -175,109 +138,142 @@ class GeminiClientManager(BaseLLMManager):
 
     async def start_session(self, webrtc_track):
         LOGGER.info(">>>>>>> Initializing Gemini Live API session <<<<<<<")
-        llm_api: llm.APIInstance | None = None
-        tools: list[ChatCompletionToolParam] | None = None
-        prompt_parts: list[str] = []
 
-        llm_context = llm.LLMContext(platform=DOMAIN,assistant="conversation",context="",user_prompt="",language="",device_id="")
-
-        try:
-            llm_api = await llm.async_get_api(
-                self.hass,
-                "assist",
-                llm_context,
-            )
-            self.llm_api = llm_api
-
-        except HomeAssistantError as err:
-            LOGGER.error("Error getting LLM API: %s", err)
-
-        tools = [
-            _format_tool(tool, llm_api.custom_serializer) for tool in llm_api.tools if llm_api.tools
-        ]
-
-        self.function_declarations = convert_openai_tools_to_gemini(tools)
-
-        LOGGER.info(">>>>>>>>>>>>>>> Tools Initialized: %s", str(tools))
+        await self._setup_llm_api()
+        await self._setup_tools()
+        await self._setup_prompt()
+        await self._setup_wakeword()
 
         try:
-            prompt_parts.append(
-                template.Template(
-                    LLM_TEMPLATE_PROMPT,
-                    self.hass,
-                ).async_render(
-                    parse_result=False,
-                )
-            )
-
-        except TemplateError as err:
-            LOGGER.error("Error rendering prompt: %s", err)
-
-        exposed_entities = await get_exposed_entities(self.hass)
-
-        prompt_parts.append(convert_entities_to_prompt(exposed_entities))
-
-        prompt_parts.append(llm.DEFAULT_INSTRUCTIONS_PROMPT)
-
-        self.prompt = "\n".join(prompt_parts)
-
-        LOGGER.info(">>>>>>>>>>>>>>> Prompt Context Initialized: \n%s",self.prompt)
-
-        try:
-            self.wakeword_model = Model(wakeword_model_paths=[os.path.join(os.path.dirname(__file__),"../assets/openwakeword", WAKE_WORD_MODEL)])
-            client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"), http_options={"api_version": GEMINI_API_VERSION})
-            while True:
-                gemini_config = types.LiveConnectConfig(
-                    response_modalities=['AUDIO'],
-                    context_window_compression=(
-                        types.ContextWindowCompressionConfig(
-                            sliding_window=types.SlidingWindow(),
-                        )
-                    ),
-                    session_resumption=types.SessionResumptionConfig(
-                        handle=self.session_handle
-                    ),
-                    speech_config={
-                        "voice_config": {"prebuilt_voice_config": {"voice_name": GEMINI_VOICE}},
-                        "language_code": GEMINI_LANGUAGE
-                    },
-
-                    tools=[{"function_declarations": self.function_declarations}],
-                    system_instruction=self.prompt
-                )
-
-                if self.session_handle:
-                    LOGGER.debug("Attempting to resume handle with handle: %s", self.session_handle)
-
-                try:
-                    async with client.aio.live.connect(model=CONF_CHAT_MODEL, config=gemini_config) as session:
-                        self.session = session
-
-                        LOGGER.info("Gemini LiveAPI connection established.")
-
-                        send_task = asyncio.create_task(self._send_to_gemini_task(webrtc_track))
-                        receive_task = asyncio.create_task(self._receive_from_gemini_task())
-                        playback_task = asyncio.create_task(self._playback_manager_task())
-
-                        self.tasks = [send_task, receive_task, playback_task]
-                        await asyncio.gather(*self.tasks)
-
-                except TimeoutError as e:
-                    LOGGER.error("Session timeout: %s", e)
-                    await self.stop_session()
-
-                except Exception as e:
-                    LOGGER.error("Gemini loop has ended: %s", e)
-                    raise
-
+            await self._run_gemini_loop(webrtc_track)
         except Exception as e:
-            LOGGER.error("Gemini session has ended unexpectedly: %s", e)
-
+            LOGGER.error("Gemini session crashed: %s", e)
         finally:
             LOGGER.warning("All gemini tasks have ended.")
             await self.stop_session()
 
-    async def stop_session(self):
+
+    async def _setup_llm_api(self):
+        try:
+            llm_context = llm.LLMContext(
+                platform=DOMAIN,
+                assistant="conversation",
+                context="",
+                user_prompt="",
+                language="",
+                device_id="",
+            )
+            self.llm_api = await llm.async_get_api(self.hass, "assist", llm_context)
+        except HomeAssistantError as err:
+            LOGGER.error("Error getting LLM API: %s", err)
+            self.llm_api = None
+        else:
+            LOGGER.info("LLM Context initialized.")
+
+    async def _setup_tools(self):
+        if not self.llm_api:
+            return
+
+        try:
+            hass_tools = [
+                _format_tool(tool, self.llm_api.custom_serializer)
+                for tool in self.llm_api.tools or []
+            ]
+            function_declarations = convert_openai_tools_to_gemini(hass_tools)
+            self.hass_function_declarations_names = [fc["name"] for fc in function_declarations]
+            function_declarations.append({"name": "good_bye"})
+            self.tools = [
+                {"function_declarations": function_declarations},
+                {"google_search": {}},
+                {"code_execution": {}},
+            ]
+        except Exception as e:
+            LOGGER.error("Error Setting up tools: %s", e)
+        else:
+            LOGGER.info("Tools initialized: %s", self.tools)
+
+    async def _setup_prompt(self):
+        parts = []
+        try:
+            parts.append(
+                template.Template(LLM_TEMPLATE_PROMPT, self.hass).async_render(parse_result=False)
+            )
+            entities = await get_exposed_entities(self.hass)
+            parts.append(convert_entities_to_prompt(entities))
+            parts.append(llm.DEFAULT_INSTRUCTIONS_PROMPT)
+            self.prompt = "\n".join(parts)
+
+        except TemplateError as err:
+            LOGGER.error("Error rendering prompt: %s", err)
+        else:
+            LOGGER.info("Prompt initialized: \n%s", self.prompt)
+
+    async def _setup_wakeword(self):
+        try:
+            self.wakeword_model = Model(
+                wakeword_model_paths=[
+                    os.path.join(os.path.dirname(__file__), "../assets/openwakeword", WAKE_WORD_MODEL)
+                ]
+            )
+        except Exception as e:
+            LOGGER.error("Error setup wake word model: %s", e)
+            LOGGER.warning("Wakeword is disabled.")
+            self.device.set_wake_word_enabled(False)
+        else:
+            LOGGER.info("Wakeword model initialized.")
+
+    async def _run_gemini_loop(self, webrtc_track):
+        client = genai.Client(
+            api_key=self.config_entry.options.get(CONF_API_KEY),
+            http_options={"api_version": GEMINI_API_VERSION},
+        )
+
+        while self._active:
+            gemini_config = types.LiveConnectConfig(
+                response_modalities=["AUDIO"],
+                context_window_compression=types.ContextWindowCompressionConfig(
+                    sliding_window=types.SlidingWindow(),
+                ),
+                session_resumption=types.SessionResumptionConfig(handle=self.session_handle),
+                speech_config={
+                    "voice_config": {"prebuilt_voice_config": {"voice_name": GEMINI_VOICE}},
+                    "language_code": GEMINI_LANGUAGE,
+                },
+                tools=self.tools,
+                system_instruction=self.prompt,
+            )
+
+            try:
+                async with client.aio.live.connect(model=CONF_CHAT_MODEL, config=gemini_config) as session:
+                    self.session = session
+                    LOGGER.info("Gemini LiveAPI connection established.")
+
+                    send_task = asyncio.create_task(self._send_to_gemini_task(webrtc_track))
+                    recv_task = asyncio.create_task(self._receive_from_gemini_task())
+                    playback_task = asyncio.create_task(self._playback_manager_task())
+
+                    self.tasks = [send_task, recv_task, playback_task]
+                    await asyncio.gather(*self.tasks)
+
+            except TimeoutError as e:
+                LOGGER.warning("Session timed out: %s, restarting...", e)
+                await self.stop_session()
+
+            except Exception as e:
+                error_msg = str(e)
+                if "BidiGenerateContent session not found" in error_msg:
+                    LOGGER.warning("Gemini session invalid. Restarting...")
+                    self.session_handle = None
+                    await self.stop_session()
+                else:
+                    LOGGER.error("Fatal Gemini error: %s", e)
+                    raise
+
+    async def stop_session(self, **kwargs):
+        # The sequence of active is important to prevent race condition
+        if "active" in kwargs:
+            self._active = kwargs["active"]
+
         if self.tasks:
             for task in self.tasks:
                 if not task.done():
@@ -292,7 +288,7 @@ class GeminiClientManager(BaseLLMManager):
             await self.session.close()
             self.session = None
 
-        LOGGER.warning("Gemini session cleaning up.")
+        LOGGER.warning("Gemini session cleaning up. Full exit: %s", self._active == False)
 
     async def _playback_manager_task(self):
         """
@@ -329,6 +325,8 @@ class GeminiClientManager(BaseLLMManager):
                 async for response in turn:
                     if data := response.data:
                         LOGGER.debug(f"[Audio Bytes] [{self.remote_user_id}] {len(data)}")
+                        if self.device.activity != "playing":
+                            self.device.set_activity("playing")
                         await self.raw_audio_to_play_queue.put(bytes(data))
                     elif text := response.text:
                         LOGGER.debug(f"Gemini: {text}")
@@ -351,6 +349,8 @@ class GeminiClientManager(BaseLLMManager):
 
                         if response.server_content.interrupted is self.interrupt_enabled:
                             LOGGER.debug("VAD Interrupting.")
+                            if not self.device.activity == "listening":
+                                self.device.set_activity("listening")
                             while not self.raw_audio_to_play_queue.empty():
                                 self.raw_audio_to_play_queue.get_nowait()
                             while not self.audio_playback_queue.empty():
@@ -364,11 +364,13 @@ class GeminiClientManager(BaseLLMManager):
                                 tool_args = json.loads(json.dumps(fc.args, default=lambda o: getattr(o, "__dict__", str(o))))
                             )
                             LOGGER.info("FUNCTION CALL: %s", fc)
-                            if fc.name in {tool["name"] for tool in self.function_declarations}:
+                            if fc.name in {tool for tool in self.hass_function_declarations_names}:
                                 result = await self.llm_api.async_call_tool(tool_input)
                             elif fc.name == "good_bye":
                                 self.is_wake.clear()
-                                result = self.is_wake.is_set()
+                                result = True
+                                self.last_wake_time = asyncio.get_event_loop().time() # Reset last wake time
+                                self.device.set_is_wake(False)
                             else:
                                 result = {"error": f"Unknown function: {fc.name}"}
 
@@ -383,10 +385,15 @@ class GeminiClientManager(BaseLLMManager):
                         await self.session.send_tool_response(function_responses=function_responses)
 
                     if response.server_content and response.server_content.turn_complete:
+                        if not self.device.activity == "listening":
+                            self.device.set_activity("listening")
                         break
 
         except asyncio.CancelledError:
             LOGGER.debug("Receive_from_gemini_task cancelled.")
+        except TimeoutError as e:
+            LOGGER.warning(f"Gemini Session Timeout: {e}")
+            raise
         except Exception as e:
             LOGGER.error(f"Error in receive_from_gemini_task: {e}")
             raise
@@ -403,27 +410,43 @@ class GeminiClientManager(BaseLLMManager):
                 for r_frame in resampled_frames:
                     audio_np = r_frame.to_ndarray().astype(np.int16).flatten()
 
-                    if not self.is_wake.is_set():
-                        # Accumulate audio until we have at least 400 samples
-                        self.wake_buffer = np.concatenate((self.wake_buffer, audio_np))
+                    if self.device.wake_word_enabled or not self.wakeword_model:
+                        if not self.is_wake.is_set():
+                            if not self.device.activity == "playing":
+                                self.device.set_activity("idle")
 
-                        while len(self.wake_buffer) >= WAKE_BUFFER:
-                            chunk = self.wake_buffer[:WAKE_BUFFER]
-                            self.wake_buffer = self.wake_buffer[WAKE_BUFFER:]
+                            # Accumulate audio until we have at least 400 samples
+                            self.wake_buffer = np.concatenate((self.wake_buffer, audio_np))
 
-                            prediction = await asyncio.to_thread(self.wakeword_model.predict, chunk) # self.wakeword_model.predict(chunk)
-                            for mdl, scores in self.wakeword_model.prediction_buffer.items():
-                                if scores[-1] > WAKE_THRESHOLD:
-                                    LOGGER.info(f"[Wakeword '{mdl}'] detected with score {scores[-1]:.3f}")
-                                    self.wakeword_model.prediction_buffer.clear()
-                                    self.wake_buffer = np.array([], dtype=np.int16)
-                                    self.is_wake.set()
+                            while len(self.wake_buffer) >= WAKE_BUFFER:
+                                chunk = self.wake_buffer[:WAKE_BUFFER]
+                                self.wake_buffer = self.wake_buffer[WAKE_BUFFER:]
+
+                                prediction = await asyncio.to_thread(self.wakeword_model.predict, chunk) # self.wakeword_model.predict(chunk)
+                                for mdl, scores in self.wakeword_model.prediction_buffer.items():
+                                    if scores[-1] > WAKE_THRESHOLD:
+                                        LOGGER.info(f"[Wakeword '{mdl}'] detected with score {scores[-1]:.3f}")
+                                        self.wakeword_model.prediction_buffer.clear()
+                                        self.wake_buffer = np.array([], dtype=np.int16)
+                                        current_time = asyncio.get_event_loop().time()
+                                        if current_time - self.last_wake_time > DEBOUNCE_TIME:  # Debounce for 2 seconds
+                                            self.is_wake.set()
+                                            self.last_wake_time = current_time
+                                            self.device.set_is_wake(True)
+                                        else:
+                                            LOGGER.warning(f"[Wakeword '{mdl}'] debounced: < {DEBOUNCE_TIME}s")
+                                        break
+
+                                if self.is_wake.is_set():
                                     break
-
-                            if self.is_wake.is_set():
-                                break
+                        else:
+                            # Send raw audio to Gemini once wake word detected
+                            audio_bytes = audio_np.tobytes()
+                            await self.session.send(
+                                input={"data": audio_bytes, "mime_type": "audio/pcm"}
+                            )
                     else:
-                        # Send raw audio to Gemini once wake word detected
+                        # Send raw audio to Gemini directly if wake word is disabled
                         audio_bytes = audio_np.tobytes()
                         await self.session.send(
                             input={"data": audio_bytes, "mime_type": "audio/pcm"}

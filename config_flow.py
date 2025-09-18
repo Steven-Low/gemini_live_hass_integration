@@ -4,7 +4,7 @@ from homeassistant.core import callback, HomeAssistant
 from homeassistant.const import CONF_API_KEY, CONF_EXTERNAL_URL
 from homeassistant.helpers import selector, entity_registry
 
-from .config.constants import DOMAIN, SIGNALING_SERVER_URL
+from .config.const import DOMAIN, SIGNALING_SERVER_URL
 from websockets.asyncio.client import connect
 import voluptuous as vol
 from typing import Any
@@ -33,6 +33,7 @@ class GeminiLiveConfigFlow(ConfigFlow, domain=DOMAIN):
                 _LOGGER.exception("Authentication Error")
             else:
                 return self.async_create_entry(title="Gemini Live", data=user_input, options={})
+
 
         return self.async_show_form(
             step_id="user",
@@ -68,7 +69,11 @@ class GeminiLiveOptionsFlowHandler(OptionsFlow):
         dynamic_schema = vol.Schema({
             vol.Optional(
                 CONF_EXTERNAL_URL,
-                description={"suggested_value": "https://homeassistant.duckdns.com"}
+                description={"suggested_value": SIGNALING_SERVER_URL}
+            ): str,
+            vol.Optional(
+                CONF_API_KEY,
+                description={"suggested_value": "AIzaSyxxxxxxxxxxxx"}
             ): str
         })
 

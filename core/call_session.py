@@ -8,15 +8,17 @@ class CallSession:
     Represents a single, self-contained call session.
     It manages its own WebRTC and LLM instances.
     """
-    def __init__(self, hass, remote_user_id, signaling_client, llm_client, llm_track, on_cleanup_callback):
+    def __init__(self, hass, config_entry, device, remote_user_id, signaling_client, llm_client, llm_track, on_cleanup_callback):
         LOGGER.debug(f"{remote_user_id}: Creating new call session.")
         self.hass = hass
+        self.config_entry = config_entry
+        self.device = device
         self.remote_user_id = remote_user_id
         self.signaling_client = signaling_client
         self.on_cleanup_callback = on_cleanup_callback
 
         # Each session gets its own, isolated managers.
-        self.llm_client = llm_client(self.hass, self.remote_user_id)
+        self.llm_client = llm_client(self.hass, self.config_entry, self.device, self.remote_user_id)
         self.webrtc_manager = WebRTCManager(self.llm_client.audio_playback_queue, llm_track)
 
         self.cleaned_up = False
@@ -59,7 +61,7 @@ class CallSession:
         self.cleaned_up = True
         LOGGER.debug(f"{self.remote_user_id}: Cleaning up...")
         # await self.signaling_client.send_hangup(self.remote_user_id)
-        await self.llm_client.stop_session()
+        await self.llm_client.stop_session(active=False)
         await self.webrtc_manager.close()
         # Notify the main application that this session is now over.
         if self.on_cleanup_callback:

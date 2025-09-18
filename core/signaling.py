@@ -1,11 +1,12 @@
 # app/signaling.py
 import socketio
-from ..config.constants import SIGNALING_SERVER_URL
+
 
 class SignalingClient:
-    def __init__(self):
+    def __init__(self, server_url):
         self.sio = socketio.AsyncClient()
         self.caller_id = ""
+        self.server_url = server_url
 
         # Callbacks
         self.on_connect_callback = None
@@ -45,7 +46,7 @@ class SignalingClient:
 
     async def connect(self, caller_id):
         self.caller_id = caller_id
-        await self.sio.connect(f"{SIGNALING_SERVER_URL}?callerId={self.caller_id}", transports=["websocket"])
+        await self.sio.connect(f"{self.server_url}?callerId={self.caller_id}", transports=["websocket"])
 
     async def disconnect(self):
         if self.sio.connected:

@@ -1,12 +1,32 @@
-
+import numbers
+import voluptuous as vol
+from typing import Any, Dict, List, Iterable
 from homeassistant.helpers import (
     area_registry,
     entity_registry,
+    device_registry as dr, intent, llm, template
 )
+
 from homeassistant.core import HomeAssistant
-import numbers
+from collections.abc import Callable
+from typing import Any, Literal
+from openai.types.chat import (
+    ChatCompletionToolParam
+)
+from openai.types.shared_params import FunctionDefinition
+from voluptuous_openapi import convert
 
 from ..models.exposed_entity import ExposedEntity
+
+def _format_tool(tool: llm.Tool, custom_serializer: Callable[[Any], Any] | None ) -> ChatCompletionToolParam:
+    """Format tool specification."""
+    tool_spec = FunctionDefinition(
+        name=tool.name,
+        parameters=convert(tool.parameters, custom_serializer=custom_serializer),
+    )
+    if tool.description:
+        tool_spec["description"] = tool.description
+    return ChatCompletionToolParam(type="function", function=tool_spec)
 
 def _sanitize_attributes(attrs: dict) -> dict:
     clean = {}
@@ -69,7 +89,6 @@ def convert_entities_to_prompt(entities: list[ExposedEntity]) -> str:
     return "\n".join(lines)
 
 
-from typing import Any, Dict, List, Iterable
 
 def _sanitize_schema(schema: Any) -> Any:
     """Recursively sanitize a JSON Schema dict so values are JSON-serializable
