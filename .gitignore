@@ -1,4 +1,5 @@
 .env
 __pycache__
 */__pycache__
-
+custom_components/*/__pycache__
+custom_components/*/*/__pycache__
