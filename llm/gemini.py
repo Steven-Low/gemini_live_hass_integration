@@ -1,5 +1,4 @@
 # app/gemini.py
-import os
 import asyncio
 import logging
 import numpy as np
@@ -17,7 +16,6 @@ import voluptuous as vol
 
 from aiortc.contrib.media import MediaStreamError
 from av.audio.resampler import AudioResampler
-from openwakeword.model import Model
 from homeassistant.exceptions import HomeAssistantError, TemplateError
 from homeassistant.core import HomeAssistant
 from homeassistant.components import conversation
@@ -35,6 +33,7 @@ from ..services.utils import (
     convert_openai_tools_to_gemini,
     _format_tool
 )
+from ..services.wakeword_client import WakeWordWSClient
 from ..config.const import (
     GEMINI_SAMPLE_RATE,
     CONF_CHAT_MODEL,
@@ -45,7 +44,8 @@ from ..config.const import (
     GEMINI_LANGUAGE,
     DOMAIN,
     LLM_TEMPLATE_PROMPT,
-    WAKE_WORD_MODEL
+    WAKE_WORD_MODEL,
+    WAKE_WS_URL
 )
 
 
@@ -110,7 +110,8 @@ class GeminiClientManager(BaseLLMManager):
         self.tasks = []
         self.audio_playback_queue = asyncio.Queue(maxsize=10)
         self.raw_audio_to_play_queue = asyncio.Queue(maxsize=200) # increase to prevent interrupt block
-        self.wakeword_model = None
+
+        self.wake_ws_client: WakeWordWSClient | None = None
         self.session_handle = None
         self.wake_buffer = np.array([], dtype=np.int16)  # buffer for wake word detection
         self.is_wake = asyncio.Event()
@@ -209,18 +210,24 @@ class GeminiClientManager(BaseLLMManager):
             LOGGER.info("Prompt initialized: \n%s", self.prompt)
 
     async def _setup_wakeword(self):
+        """
+        Attempt to connect to a WebSocket wake-word server first (fast, separate process).
+        If that fails, fall back to local openwakeword Model (in-process).
+        """
+        # Attempt to start WebSocket client (best path)
         try:
-            self.wakeword_model = Model(
-                wakeword_model_paths=[
-                    os.path.join(os.path.dirname(__file__), "../assets/openwakeword", WAKE_WORD_MODEL)
-                ]
-            )
+            self.wake_ws_client = WakeWordWSClient(url=WAKE_WS_URL, reconnect_interval=3)
+            await self.wake_ws_client.start()
+            await asyncio.sleep(0.1)
+            if not self.wake_ws_client._connected_event.is_set():
+                LOGGER.warning("WakeWord WS client started but not yet connected; will reconnect in background.")
+            else:
+                LOGGER.info("WakeWord WS client connected.")
+            return
         except Exception as e:
-            LOGGER.error("Error setup wake word model: %s", e)
-            LOGGER.warning("Wakeword is disabled.")
-            self.device.set_wake_word_enabled(False)
-        else:
-            LOGGER.info("Wakeword model initialized.")
+            LOGGER.warning("Could not start WakeWord WS client: %s", e)
+            self.wake_ws_client = None
+
 
     async def _run_gemini_loop(self, webrtc_track):
         client = genai.Client(
@@ -410,35 +417,65 @@ class GeminiClientManager(BaseLLMManager):
                 for r_frame in resampled_frames:
                     audio_np = r_frame.to_ndarray().astype(np.int16).flatten()
 
-                    if self.device.wake_word_enabled or not self.wakeword_model:
+                    if self.device.wake_word_enabled and self.wake_ws_client:
                         if not self.is_wake.is_set():
                             if not self.device.activity == "playing":
                                 self.device.set_activity("idle")
 
-                            # Accumulate audio until we have at least 400 samples
+                            # Accumulate audio until we have at least WAKE_BUFFER samples
                             self.wake_buffer = np.concatenate((self.wake_buffer, audio_np))
 
+                            # Process chunks from the wake buffer
                             while len(self.wake_buffer) >= WAKE_BUFFER:
                                 chunk = self.wake_buffer[:WAKE_BUFFER]
                                 self.wake_buffer = self.wake_buffer[WAKE_BUFFER:]
 
-                                prediction = await asyncio.to_thread(self.wakeword_model.predict, chunk) # self.wakeword_model.predict(chunk)
-                                for mdl, scores in self.wakeword_model.prediction_buffer.items():
-                                    if scores[-1] > WAKE_THRESHOLD:
-                                        LOGGER.info(f"[Wakeword '{mdl}'] detected with score {scores[-1]:.3f}")
-                                        self.wakeword_model.prediction_buffer.clear()
-                                        self.wake_buffer = np.array([], dtype=np.int16)
-                                        current_time = asyncio.get_event_loop().time()
-                                        if current_time - self.last_wake_time > DEBOUNCE_TIME:  # Debounce for 2 seconds
-                                            self.is_wake.set()
-                                            self.last_wake_time = current_time
-                                            self.device.set_is_wake(True)
-                                        else:
-                                            LOGGER.warning(f"[Wakeword '{mdl}'] debounced: < {DEBOUNCE_TIME}s")
-                                        break
+                                scores = {}  # dict: model_name -> score (float)
 
-                                if self.is_wake.is_set():
-                                    break
+                                # Try the remote WS client, if present
+                                if self.wake_ws_client:
+                                    try:
+                                        resp = await self.wake_ws_client.predict_bytes(chunk.tobytes(), timeout=1.0)
+                                        if isinstance(resp, dict):
+                                            # accept either {"scores": {...}} or {"ok_nabu": 0.8} variants
+                                            if "scores" in resp and isinstance(resp["scores"], dict):
+                                                scores = resp["scores"]
+                                            else:
+                                                scores = resp
+                                    except Exception as e:
+                                        try:
+                                            if self.wake_ws_client and getattr(self.wake_ws_client, "ws", None):
+                                                await self.wake_ws_client.ws.close()
+                                        except Exception:
+                                            pass
+                                        # remove reference so fallback logic runs
+                                        self.wake_ws_client = None
+
+
+                                # Evaluate detection using the 'scores' dict (not prediction_buffer directly)
+                                detected = False
+                                for mdl, sc in scores.items():
+                                    try:
+                                        if float(sc) > WAKE_THRESHOLD:
+                                            LOGGER.info(f"[Wakeword '{mdl}'] detected with score {float(sc):.3f}")
+
+                                            self.wake_buffer = np.array([], dtype=np.int16)
+                                            current_time = asyncio.get_event_loop().time()
+                                            if current_time - self.last_wake_time > DEBOUNCE_TIME:
+                                                self.is_wake.set()
+                                                self.last_wake_time = current_time
+                                                self.device.set_is_wake(True)
+                                            else:
+                                                LOGGER.warning(f"[Wakeword '{mdl}'] debounced: < {DEBOUNCE_TIME}s")
+                                            detected = True
+                                            break
+                                    except Exception as e:
+                                        LOGGER.exception("Error handling wake score for %s: %s", mdl, e)
+
+                                if detected:
+                                    break  # break out of the while len(wake_buffer) loop
+
+
                         else:
                             # Send raw audio to Gemini once wake word detected
                             audio_bytes = audio_np.tobytes()
