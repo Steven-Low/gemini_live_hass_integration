@@ -6,19 +6,11 @@ import json
 
 from google import genai
 from google.genai import types
-from collections.abc import Callable
-from typing import Any, Literal
-from openai.types.chat import (
-    ChatCompletionToolParam
-)
-from openai.types.shared_params import FunctionDefinition
-import voluptuous as vol
 
 from aiortc.contrib.media import MediaStreamError
 from av.audio.resampler import AudioResampler
 from homeassistant.exceptions import HomeAssistantError, TemplateError
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.components import conversation
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_API_KEY
 from homeassistant.helpers import (
@@ -222,7 +214,7 @@ class GeminiClientManager(BaseLLMManager):
         """
         self.device.add_wake_word_enabled_listener(self._on_wake_toggle)
         asyncio.create_task(self._update_wakeword_connection())
-        # await self._update_wakeword_connection()
+
 
     async def _update_wakeword_connection(self):
         """Start or stop the WS client based on the device toggle."""
@@ -496,6 +488,7 @@ class GeminiClientManager(BaseLLMManager):
                     else:
                         # Display wake state
                         self.is_wake.set()
+                        self.device.set_is_wake(True)
 
                         # Send raw audio to Gemini directly if wake word is disabled
                         audio_bytes = audio_np.tobytes()

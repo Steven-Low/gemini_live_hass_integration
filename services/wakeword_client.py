@@ -24,7 +24,7 @@ class WakeWordWSClient:
         while not self._stopping:
             if self.ws is None:
                 try:
-                    LOGGER.info("Connecting to WS: %s", self.url)
+                    LOGGER.info("Connecting to WS: %s", self.url) 
                     self.ws = await websockets.connect(self.url, max_size=None)
                     LOGGER.info("Connected!")
                     retry_count = 0
