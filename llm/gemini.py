@@ -17,7 +17,7 @@ import voluptuous as vol
 from aiortc.contrib.media import MediaStreamError
 from av.audio.resampler import AudioResampler
 from homeassistant.exceptions import HomeAssistantError, TemplateError
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.components import conversation
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_API_KEY
@@ -123,6 +123,12 @@ class GeminiClientManager(BaseLLMManager):
         self.hass_function_declarations_names = []
 
 
+    @callback
+    def _on_wake_toggle(self):
+        """Called automatically when HA switch changes."""
+        asyncio.create_task(self._update_wakeword_connection())
+
+
     #TODO: Handle video frames
     async def start_video_processing(self, webrtc_track):
         asyncio.create_task(self._drain_track(webrtc_track))
@@ -214,19 +220,24 @@ class GeminiClientManager(BaseLLMManager):
         Attempt to connect to a WebSocket wake-word server first (fast, separate process).
         If that fails, fall back to local openwakeword Model (in-process).
         """
-        # Attempt to start WebSocket client (best path)
-        try:
-            self.wake_ws_client = WakeWordWSClient(url=WAKE_WS_URL, reconnect_interval=3)
-            await self.wake_ws_client.start()
-            await asyncio.sleep(0.1)
-            if not self.wake_ws_client._connected_event.is_set():
-                LOGGER.warning("WakeWord WS client started but not yet connected; will reconnect in background.")
+        self.device.add_wake_word_enabled_listener(self._on_wake_toggle)
+        asyncio.create_task(self._update_wakeword_connection())
+        # await self._update_wakeword_connection()
+
+    async def _update_wakeword_connection(self):
+        """Start or stop the WS client based on the device toggle."""
+        if self.device.wake_word_enabled:
+            if self.wake_ws_client is None:
+                LOGGER.info("Wake word enabled → starting WS client...")
+                self.wake_ws_client = WakeWordWSClient(url=WAKE_WS_URL, reconnect_interval=3)
+                await self.wake_ws_client.start()
             else:
-                LOGGER.info("WakeWord WS client connected.")
-            return
-        except Exception as e:
-            LOGGER.warning("Could not start WakeWord WS client: %s", e)
-            self.wake_ws_client = None
+                LOGGER.info("Wake word already running.")
+        else:
+            if self.wake_ws_client is not None:
+                LOGGER.info("Wake word disabled → stopping WS client...")
+                await self.wake_ws_client.stop()
+                self.wake_ws_client = None
 
 
     async def _run_gemini_loop(self, webrtc_track):
@@ -483,6 +494,9 @@ class GeminiClientManager(BaseLLMManager):
                                 input={"data": audio_bytes, "mime_type": "audio/pcm"}
                             )
                     else:
+                        # Display wake state
+                        self.is_wake.set()
+
                         # Send raw audio to Gemini directly if wake word is disabled
                         audio_bytes = audio_np.tobytes()
                         await self.session.send(

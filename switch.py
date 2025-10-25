@@ -1,10 +1,12 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
+from homeassistant.const import STATE_ON
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.core import callback, HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from .config.const import DOMAIN
 from .models.devices import GeminiLiveDevice
@@ -31,7 +33,7 @@ async def async_setup_entry(
     app.register_entity_adder(_handle_new_session)
 
 
-class GeminiWakeSwitch(GeminiLiveEntity, SwitchEntity):
+class GeminiWakeSwitch(GeminiLiveEntity, SwitchEntity, RestoreEntity):
     """Switch to enable/disable wake word detection."""
 
     entity_description = SwitchEntityDescription(
@@ -52,14 +54,24 @@ class GeminiWakeSwitch(GeminiLiveEntity, SwitchEntity):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        self._device.set_wake_word_enabled_listener(self._handle_update)
+
+        state = await self.async_get_last_state()
+        if state is not None:
+            self._attr_is_on = (state.state == STATE_ON)
+        else:
+            self._attr_is_on = self._device.wake_word_enabled
+
+        self._device.add_wake_word_enabled_listener(self._on_device_wake_toggle)
 
     @callback
-    def _handle_update(self) -> None:
+    def _on_device_wake_toggle(self) -> None:
+        self._attr_is_on = self._device.wake_word_enabled
         self.async_write_ha_state()
 
     async def async_turn_on(self, **kwargs) -> None:
+        self._attr_is_on = True
         self._device.set_wake_word_enabled(True)
 
     async def async_turn_off(self, **kwargs) -> None:
+        self._attr_is_on = False
         self._device.set_wake_word_enabled(False)

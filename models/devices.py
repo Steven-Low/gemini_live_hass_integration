@@ -1,7 +1,9 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from homeassistant.core import callback
+import logging
 
+LOGGER = logging.getLogger(__name__)
 
 @dataclass
 class GeminiLiveDevice:
@@ -13,12 +15,19 @@ class GeminiLiveDevice:
     # Core states
     is_wake: bool = False                 # Actual wakeword/session state (triggered)
     activity: str = "idle"                # idle | listening | playing
-    wake_word_enabled: bool = True             # Whether wake word detection is enabled
+    wake_word_enabled: bool = True        # Whether wake word detection is enabled
 
-    # Optional listeners
+    # Single listeners
     _wake_listener: Callable[[], None] | None = None
     _activity_listener: Callable[[], None] | None = None
-    _wake_word_enabled_listener: Callable[[], None] | None = None
+
+    # Multiple listeners
+    _wake_word_enabled_listeners: Callable[[], None] | None = None
+
+    def __post_init__(self):
+        # init lists (dataclass default factory avoidance)
+        if self._wake_word_enabled_listeners is None:
+            self._wake_word_enabled_listeners = []
 
     # ----------------------
     # Update methods
@@ -41,8 +50,11 @@ class GeminiLiveDevice:
     def set_wake_word_enabled(self, enabled: bool) -> None:
         if enabled != self.wake_word_enabled:
             self.wake_word_enabled = enabled
-            if self._wake_word_enabled_listener:
-                self._wake_word_enabled_listener()
+            for cb in list(self._wake_word_enabled_listeners):
+                try:
+                    cb()
+                except Exception:
+                    LOGGER.exception("Exception in wake_word_enabled listener")
 
     # ----------------------
     # Listener registration
@@ -56,5 +68,11 @@ class GeminiLiveDevice:
         self._activity_listener = cb
 
     @callback
-    def set_wake_word_enabled_listener(self, cb: Callable[[], None]) -> None:
-        self._wake_word_enabled_listener = cb
+    def add_wake_word_enabled_listener(self, cb: Callable[[], None]) -> None:
+        if cb not in self._wake_word_enabled_listeners:
+            self._wake_word_enabled_listeners.append(cb)
+
+    @callback
+    def remove_wake_word_enabled_listener(self, cb: Callable[[], None]) -> None:
+        if cb in self._wake_word_enabled_listeners:
+            self._wake_word_enabled_listeners.remove(cb)
