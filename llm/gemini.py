@@ -375,7 +375,11 @@ class GeminiClientManager(BaseLLMManager):
                             )
                             LOGGER.info("FUNCTION CALL: %s", fc)
                             if fc.name in {tool for tool in self.hass_function_declarations_names}:
-                                result = await self.llm_api.async_call_tool(tool_input)
+                                try:
+                                    result = await self.llm_api.async_call_tool(tool_input)
+                                except intent.MatchFailedError as e:
+                                    LOGGER.warning("Entity matching failed: %s", e)
+                                    result = {"error": f"Failed to execute the requested action: {e}"}
                             elif fc.name == "good_bye":
                                 self.is_wake.clear()
                                 result = True
