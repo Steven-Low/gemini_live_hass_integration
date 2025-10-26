@@ -1,10 +1,10 @@
 
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback, HomeAssistant
-from homeassistant.const import CONF_API_KEY, CONF_EXTERNAL_URL
+from homeassistant.const import CONF_API_KEY, CONF_EXTERNAL_URL, CONF_URL
 from homeassistant.helpers import selector, entity_registry
 
-from .config.const import DOMAIN, SIGNALING_SERVER_URL
+from .config.const import DOMAIN, SIGNALING_SERVER_URL, WAKE_WS_URL
 from websockets.asyncio.client import connect
 import voluptuous as vol
 from typing import Any
@@ -38,8 +38,9 @@ class GeminiLiveConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema({
+                vol.Required(CONF_API_KEY): str,
                 vol.Required(CONF_EXTERNAL_URL, default=SIGNALING_SERVER_URL): str,
-                vol.Required(CONF_API_KEY): str
+                vol.Optional(CONF_URL, default=WAKE_WS_URL): str,
             }),
             errors=errors
         )
@@ -68,13 +69,17 @@ class GeminiLiveOptionsFlowHandler(OptionsFlow):
 
         dynamic_schema = vol.Schema({
             vol.Optional(
+                CONF_API_KEY,
+                description={"suggested_value": "AIzaSyxxxxxxxxxxxx"}
+            ): str,
+            vol.Optional(
                 CONF_EXTERNAL_URL,
                 description={"suggested_value": SIGNALING_SERVER_URL}
             ): str,
             vol.Optional(
-                CONF_API_KEY,
-                description={"suggested_value": "AIzaSyxxxxxxxxxxxx"}
-            ): str
+                CONF_URL,
+                description={"suggested_value": WAKE_WS_URL}
+            ): str,
         })
 
         return self.async_show_form(step_id="init", data_schema=dynamic_schema)

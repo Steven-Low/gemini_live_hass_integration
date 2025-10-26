@@ -36,3 +36,4 @@ An overview of the areas and the devices in this smart home:
 """
 
 WAKE_WORD_MODEL = "ok_nabu.onnx"
+WAKE_WS_URL = "ws://10.10.10.124:12201/ws"
