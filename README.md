@@ -101,17 +101,19 @@ Go to https://github.com/gemini-fan/react_native_webrtc_client.git
 
 ### Home Assistant Setup
 #### Manual installation
-1. Go to HA custom_components directory and clone the repo
+1. Clone the repo
 ```
-git clone https://github.com/gemini-fan/gemini_live_hass_integration.git
-```
-2. Restart home assistant instance
-3. Search Gemini Live Conversation at the integration section
-4. Enter the signalling server url and gemini api key
-5. Call your gemini via caller id 666666 (default) from your client app
-6. Happy chatting :D
+git clone https://github.com/gemini_live_hass_integration.git
+```_
+2. Copy the folder contents to HA custom_components directory
+3. Restart home assistant instance
+4. Search Gemini Live Conversation at the integration section
+5. Enter the signalling server url and gemini api key
+6. Call your gemini via caller id 666666 (default) from your client app
+7. Happy chatting :D
 
-![Gemini](https://www.livemint.com/lm-img/img/2024/10/09/600x338/Gemini-1-0--since-its-release-in-December--is-avai_1710309863586_1728492510435.jpeg)
+#### HACS (Recommended)
+HACS > Integrations > 3 dots (upper top corner) > Custom repositories > URL: https://github.com/Steven-Low/gemini_live_hass_integration, Category: Integration > Add > wait > Gemini Live Conversation > Install
 
 
 

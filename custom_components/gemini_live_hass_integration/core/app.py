@@ -23,7 +23,7 @@ class GeminiApp:
         self.active_sessions = {}
         self.signaling_client = None
         self.llm_name = "gemini"
-        self.cli = CLIHandler(self)
+        # self.cli = CLIHandler(self)
         self.entity_adders: list[Callable[[GeminiLiveDevice], None]] = []  # support multiple platforms
         self._wire_signaling()
 
@@ -179,7 +179,9 @@ class GeminiApp:
     async def run(self):
         try:
             await self._setup_socket_connection(max_retries=3)
-            await self.cli.loop() # Assuming the CLI now calls hang_up with a specific ID
+            while True:
+                await asyncio.sleep(3600)
+            # await self.cli.loop() # Assuming the CLI now calls hang_up with a specific ID
         except ConnectionRefusedError as e:
             LOGGER.error("Please check your signalling socket server url/port configuration.")
         except Exception as e:
