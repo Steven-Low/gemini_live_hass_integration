@@ -111,5 +111,7 @@ git clone https://github.com/gemini-fan/gemini_live_hass_integration.git
 5. Call your gemini via caller id 666666 (default) from your client app
 6. Happy chatting :D
 
+![Gemini](https://www.livemint.com/lm-img/img/2024/10/09/600x338/Gemini-1-0--since-its-release-in-December--is-avai_1710309863586_1728492510435.jpeg)
+
 
 
