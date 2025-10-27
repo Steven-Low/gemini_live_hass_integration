@@ -23,6 +23,7 @@ class GeminiApp:
         self.active_sessions = {}
         self.signaling_client = None
         self.llm_name = "gemini"
+        self.started = False
         # self.cli = CLIHandler(self)
         self.entity_adders: list[Callable[[GeminiLiveDevice], None]] = []  # support multiple platforms
         self._wire_signaling()
@@ -189,10 +190,10 @@ class GeminiApp:
         finally:
             await self.shutdown()
 
-    async def _setup_socket_connection(self, max_retries: int = 3):
+    async def _setup_socket_connection(self, max_retries: int = 5):
         """Try to connect to signaling server with retry + backoff."""
-        attempt = 0
-        delay = 2
+        attempt = 1
+        delay = 5
 
         while True:
             try:

@@ -36,8 +36,6 @@ from ..config.const import (
     GEMINI_LANGUAGE,
     DOMAIN,
     LLM_TEMPLATE_PROMPT,
-    WAKE_WORD_MODEL,
-    WAKE_WS_URL
 )
 
 
@@ -119,6 +117,11 @@ class GeminiClientManager(BaseLLMManager):
     def _on_wake_toggle(self):
         """Called automatically when HA switch changes."""
         asyncio.create_task(self._update_wakeword_connection())
+
+    def get_config(self, key):
+        return self.config_entry.options.get(
+            key, self.config_entry.data.get(key)
+        )
 
 
     #TODO: Handle video frames
@@ -221,7 +224,7 @@ class GeminiClientManager(BaseLLMManager):
         if self.device.wake_word_enabled:
             if self.wake_ws_client is None:
                 LOGGER.info("Wake word enabled → starting WS client...")
-                self.wake_ws_client = WakeWordWSClient(url=WAKE_WS_URL, reconnect_interval=3)
+                self.wake_ws_client = WakeWordWSClient(config_entry=self.config_entry, reconnect_interval=3)
                 await self.wake_ws_client.start()
             else:
                 LOGGER.info("Wake word already running.")
