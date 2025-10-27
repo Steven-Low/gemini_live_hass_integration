@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.helpers.typing import ConfigType
 from homeassistant.core import HomeAssistant
-from homeassistant.const import CONF_API_KEY, Platform
+from homeassistant.const import Platform
 from homeassistant.helpers import config_validation as cv, device_registry as dr
-from dotenv import load_dotenv
+
 
 
 from .core.app import GeminiApp
@@ -29,14 +28,15 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     app = GeminiApp(hass, config_entry)
     hass.data.setdefault(DOMAIN, {})[config_entry.entry_id] = {"app": app}
 
-    config_entry.async_create_background_task(
-        hass,
-        app.run(),
-        f"Starting Gemini Application...",
-    )
+    if not app.started:
+        config_entry.async_create_background_task(
+            hass,
+            app.run(),
+            f"Starting Gemini Application...",
+        )
+        app.started = True
 
     await hass.config_entries.async_forward_entry_setups(config_entry, SATELLITE_PLATFORMS)
-
     return True
 
 

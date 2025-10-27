@@ -1,48 +1,49 @@
+from __future__ import annotations
 
-from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
-from homeassistant.core import callback, HomeAssistant
-from homeassistant.const import CONF_API_KEY, CONF_EXTERNAL_URL, CONF_URL
-from homeassistant.helpers import selector, entity_registry
-
-from .config.const import DOMAIN, SIGNALING_SERVER_URL, WAKE_WS_URL
-from websockets.asyncio.client import connect
-import voluptuous as vol
 from typing import Any
 import logging
-import json
+import voluptuous as vol
 
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
+from homeassistant.core import callback, HomeAssistant
+from homeassistant.const import CONF_API_KEY, CONF_EXTERNAL_URL
 
+from .config.const import DOMAIN, SIGNALING_SERVER_URL, CONF_WAKE_URL
 
 _LOGGER = logging.getLogger(__name__)
 
+# ---------- FIRST INSTALL FORM ----------
+STEP_USER_DATA_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_API_KEY): str,
+        vol.Required(CONF_EXTERNAL_URL, default=SIGNALING_SERVER_URL): str,
+        vol.Optional(CONF_WAKE_URL, default=CONF_WAKE_URL): str,
+    }
+)
 
 class GeminiLiveConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for Gemini Assist."""
+    """Handle config flow for Gemini Live."""
 
     VERSION = 1
 
-    async def async_step_user(self, user_input: dict[str, Any] | None = None):
-        """Handle the initial step."""
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle initial setup."""
+        if user_input is None:
+            return self.async_show_form(
+                step_id="user", data_schema=STEP_USER_DATA_SCHEMA
+            )
 
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            try:
-                pass
-            except Exception:
-                errors["base"] = "Invalid Authentication"
-                _LOGGER.exception("Authentication Error")
-            else:
-                return self.async_create_entry(title="Gemini Live", data=user_input, options={})
-
-
-        return self.async_show_form(
-            step_id="user",
-            data_schema=vol.Schema({
-                vol.Required(CONF_API_KEY): str,
-                vol.Required(CONF_EXTERNAL_URL, default=SIGNALING_SERVER_URL): str,
-                vol.Optional(CONF_URL, default=WAKE_WS_URL): str,
-            }),
-            errors=errors
+        # Store initial data (STATIC)
+        return self.async_create_entry(
+            title="Gemini Live",
+            data=user_input,
         )
 
     @staticmethod
@@ -54,32 +55,44 @@ class GeminiLiveConfigFlow(ConfigFlow, domain=DOMAIN):
         return GeminiLiveOptionsFlowHandler()
 
 
+# ---------- OPTIONS FLOW (USED AFTER INSTALL) ----------
 class GeminiLiveOptionsFlowHandler(OptionsFlow):
+    """Handle options for Gemini Live."""
 
     @property
-    def config_entry(self):
+    def config_entry(self) -> ConfigEntry:
+        """Return the linked config entry."""
         return self.hass.config_entries.async_get_entry(self.handler)
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Manage the options."""
+        """Options form."""
         if user_input is not None:
+            # Saved to entry.options (NOT data)
             return self.async_create_entry(title="Gemini Live", data=user_input)
 
-        dynamic_schema = vol.Schema({
-            vol.Optional(
-                CONF_API_KEY,
-                description={"suggested_value": "AIzaSyxxxxxxxxxxxx"}
-            ): str,
-            vol.Optional(
-                CONF_EXTERNAL_URL,
-                description={"suggested_value": SIGNALING_SERVER_URL}
-            ): str,
-            vol.Optional(
-                CONF_URL,
-                description={"suggested_value": WAKE_WS_URL}
-            ): str,
-        })
+        # Load current values
+        # options override data, fallback to defaults
+        current_api_key = self.config_entry.options.get(
+            CONF_API_KEY,
+            self.config_entry.data.get(CONF_API_KEY, "")
+        )
+        current_signaling = self.config_entry.options.get(
+            CONF_EXTERNAL_URL,
+            self.config_entry.data.get(CONF_EXTERNAL_URL, SIGNALING_SERVER_URL)
+        )
+        current_wake = self.config_entry.options.get(
+            CONF_WAKE_URL,
+            self.config_entry.data.get(CONF_WAKE_URL, CONF_WAKE_URL)
+        )
 
-        return self.async_show_form(step_id="init", data_schema=dynamic_schema)
+        options_schema = vol.Schema(
+            {
+                vol.Optional(CONF_API_KEY, default=current_api_key): str,
+                vol.Optional(CONF_EXTERNAL_URL, default=current_signaling): str,
+                vol.Optional(CONF_WAKE_URL, default=current_wake): str,
+            }
+        )
+
+        return self.async_show_form(step_id="init", data_schema=options_schema)

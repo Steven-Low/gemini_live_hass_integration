@@ -2,18 +2,27 @@ import asyncio
 import websockets
 import logging
 import json
+from homeassistant.config_entries import ConfigEntry
+from ..config.const import (
+    CONF_WAKE_URL
+)
 
 LOGGER = logging.getLogger(__name__)
 
 class WakeWordWSClient:
-    def __init__(self, url="ws://10.10.10.124:12201/ws", reconnect_interval=3.0, max_retries=5):
-        self.url = url
+    def __init__(self, config_entry: ConfigEntry, reconnect_interval=3.0, max_retries=5):
+        self.config_entry = config_entry
         self.ws = None
         self.reconnect_interval = reconnect_interval
         self.max_retries = max_retries
         self._lock = asyncio.Lock()
         self._connected_event = asyncio.Event()
         self._stopping = False
+
+    def get_config(self, key):
+        return self.config_entry.options.get(
+            key, self.config_entry.data.get(key)
+        )
 
     async def start(self):
         asyncio.create_task(self._ensure_connection_loop())
@@ -24,8 +33,8 @@ class WakeWordWSClient:
         while not self._stopping:
             if self.ws is None:
                 try:
-                    LOGGER.info("Connecting to WS: %s", self.url) 
-                    self.ws = await websockets.connect(self.url, max_size=None)
+                    LOGGER.info("Connecting to WS: %s", self.get_config(CONF_WAKE_URL))
+                    self.ws = await websockets.connect(self.get_config(CONF_WAKE_URL), max_size=None)
                     LOGGER.info("Connected!")
                     retry_count = 0
                     self._connected_event.set()
