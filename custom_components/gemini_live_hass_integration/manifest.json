@@ -7,7 +7,7 @@
   "integration_type": "service",
   "iot_class": "cloud_polling",
     "requirements": [
-        "google-genai>=1.18.0",
+        "google-genai==1.18.0",
         "google-auth",
         "google-crc32c",
         "aiortc>=1.8.0",
