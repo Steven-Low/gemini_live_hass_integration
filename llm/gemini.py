@@ -51,7 +51,8 @@ Answer questions about the world truthfully.
 Answer in plain text. Keep it simple and to the point.
 
 You also have access to the following functions for smart home:
-- HassTurnOn: Turns on, opens, presses, or locks a device or entity.
+- HassPressButton: Presses, clicks, starts a device or entity.
+- HassTurnOn: Turns on, opens, or locks a device or entity.
 - HassTurnOff: Turns off, closes, disables, or unlocks a device or entity.
 - HassCancelAllTimers: Cancels all timers in an area.
 - HassBroadcast: Broadcasts a spoken message through the home.
@@ -80,6 +81,13 @@ Assistant → HassTurnOn:
 {
   "name": "light",
   "area": "Living Room"
+}
+
+User: "Press the door bell."
+Assistant → HassPressButton
+{
+  "name": "Door Bell",
+  "domain": ["input_button"]
 }
 """
 
@@ -382,7 +390,10 @@ class GeminiClientManager(BaseLLMManager):
                                     result = await self.llm_api.async_call_tool(tool_input)
                                 except intent.MatchFailedError as e:
                                     LOGGER.warning("Entity matching failed: %s", e)
-                                    result = {"error": f"Failed to execute the requested action: {e}"}
+                                    result = {"error": f"Failed to match the requested intent action: {e}"}
+                                except HomeAssistantError as e:
+                                    LOGGER.error("Home assistant execution failed: %s", e)
+                                    result = {"error": f"Failed to execute the hass tools: {e}"}
                             elif fc.name == "good_bye":
                                 self.is_wake.clear()
                                 result = True
