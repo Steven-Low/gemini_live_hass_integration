@@ -1,0 +1,21 @@
+HassPressButton:
+  description: Press or Click a button entity
+  speech:
+    text: >
+      Sure — pressing {{ (domain[0] if domain is defined else 'input_button') }}
+      of {{ name }} now.
+  slots:
+    domain:
+      type: domain
+      domain:
+        - input_button
+        - button
+    name:
+      type: text
+  action:
+    - service: "{{ (domain[0] if domain is defined else 'input_button') }}.press"
+      target:
+        entity_id: >
+          {{ (domain[0] if domain is defined else 'input_button') }}.{{
+             name | lower | replace(' ', '_') | replace('-', '_')
+          }}

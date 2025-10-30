@@ -2,7 +2,6 @@ import logging
 import asyncio
 
 from ..core.signaling import SignalingClient
-from ..core.cli import CLIHandler
 from ..config.const import MAX_SESSIONS, DOMAIN
 from ..config.factories import create_call_session
 from ..models.devices import GeminiLiveDevice
@@ -24,7 +23,6 @@ class GeminiApp:
         self.signaling_client = None
         self.llm_name = "gemini"
         self.started = False
-        # self.cli = CLIHandler(self)
         self.entity_adders: list[Callable[[GeminiLiveDevice], None]] = []  # support multiple platforms
         self._wire_signaling()
 

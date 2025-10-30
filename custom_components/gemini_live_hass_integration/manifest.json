@@ -18,5 +18,5 @@
         "websockets>=15.0.1",
         "aiohttp"
     ],
-  "version": "1.0.0"
+  "version": "1.0.1"
 }

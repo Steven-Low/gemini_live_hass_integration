@@ -57,6 +57,7 @@ Are you frustrated with all those paid api keys or plan? What the hell PipeCat b
 - [x] Establish client <--> gemini client <--> gemini websocket connection for 24/7
 - [x] Standalone docker installation
 - [x] Home Assistant Integration
+- [x] Access custom function or tool in jinja template
 
 ## How To Use?
 This project is compose of 3 major parts (android client, signalling server & home assistant integration).
@@ -116,4 +117,36 @@ git clone https://github.com/gemini_live_hass_integration.git
 HACS > Integrations > 3 dots (upper top corner) > Custom repositories > URL: https://github.com/Steven-Low/gemini_live_hass_integration, Category: Integration > Add > wait > Gemini Live Conversation > Install
 
 
+## Extras (Optional)
+> You can write your own custom service and exposed to gemini via jinja template.
+> Example: Exposing the input_button helpers to gemini.
+- configuration.yaml
+```
+# Side loaded scripts for custom intents exposing to gemini
+intent_script: !include intent_scripts.yaml
+```
+- intent_scripts.yaml
+```
+HassPressButton:
+  description: Press or Click a button entity
+  speech:
+    text: >
+      Sure — pressing {{ (domain[0] if domain is defined else 'input_button') }}
+      of {{ name }} now.
+  slots:
+    domain:
+      type: domain
+      domain:
+        - input_button
+        - button
+    name:
+      type: text
+  action:
+    - service: "{{ (domain[0] if domain is defined else 'input_button') }}.press"
+      target:
+        entity_id: >
+          {{ (domain[0] if domain is defined else 'input_button') }}.{{
+             name | lower | replace(' ', '_') | replace('-', '_')
+          }}
+```
 
